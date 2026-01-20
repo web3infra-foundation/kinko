@@ -32,7 +32,7 @@ pub enum SockAddrType {
     IP = 0x6,
 }
 
-pub trait SockAddr: fmt::Display + AsAny + fmt::Debug + CloneBox {
+pub trait SockAddr: Sync + Send + fmt::Display + AsAny + fmt::Debug + CloneBox {
     // contains returns true if the other SockAddr is contained within the receiver
     fn contains(&self, other: &dyn SockAddr) -> bool;
 
@@ -105,7 +105,7 @@ impl fmt::Display for SockAddrType {
             SockAddrType::Unix => "Unix",
             _ => "Unknown",
         };
-        write!(f, "{}", type_str)
+        write!(f, "{type_str}")
     }
 }
 
@@ -130,7 +130,7 @@ pub fn new_sock_addr(s: &str) -> Result<Box<dyn SockAddr>, RvError> {
         return Ok(Box::new(ip));
     }
 
-    Err(RvError::ErrResponse(format!("Unable to convert {} to an IPv4 or IPv6 address, or a UNIX Socket", s)))
+    Err(RvError::ErrResponse(format!("Unable to convert {s} to an IPv4 or IPv6 address, or a UNIX Socket")))
 }
 
 #[cfg(test)]

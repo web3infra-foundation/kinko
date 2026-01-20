@@ -2,7 +2,8 @@
 //! manipulating certificates as a CA or encrypting a piece of data by using a public key.
 
 use std::{
-    sync::{atomic::AtomicU64, Arc, RwLock},
+    any::Any,
+    sync::{atomic::AtomicU64, Arc},
     time::Duration,
 };
 
@@ -41,7 +42,7 @@ pub struct PkiModule {
 }
 
 pub struct PkiBackendInner {
-    pub core: Arc<RwLock<Core>>,
+    pub core: Arc<Core>,
     pub cert_count: AtomicU64,
     pub revoked_cert_count: AtomicU64,
 }
@@ -53,7 +54,7 @@ pub struct PkiBackend {
 }
 
 impl PkiBackend {
-    pub fn new(core: Arc<RwLock<Core>>) -> Self {
+    pub fn new(core: Arc<Core>) -> Self {
         Self {
             inner: Arc::new(PkiBackendInner {
                 core,
@@ -64,8 +65,8 @@ impl PkiBackend {
     }
 
     pub fn new_backend(&self) -> LogicalBackend {
-        let pki_backend_ref1 = Arc::clone(&self.inner);
-        let pki_backend_ref2 = Arc::clone(&self.inner);
+        let pki_backend_ref1 = self.inner.clone();
+        let pki_backend_ref2 = self.inner.clone();
 
         let mut backend = new_logical_backend!({
             root_paths: ["config/*", "revoke/*", "crl/rotate"],
@@ -100,21 +101,27 @@ impl PkiBackend {
     }
 }
 
+#[maybe_async::maybe_async]
 impl PkiBackendInner {
-    pub fn revoke_secret_creds(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn revoke_secret_creds(
+        &self,
+        _backend: &dyn Backend,
+        _req: &mut Request,
+    ) -> Result<Option<Response>, RvError> {
         Ok(None)
     }
-    pub fn renew_secret_creds(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn renew_secret_creds(
+        &self,
+        _backend: &dyn Backend,
+        _req: &mut Request,
+    ) -> Result<Option<Response>, RvError> {
         Ok(None)
     }
 }
 
 impl PkiModule {
-    pub fn new(core: &Core) -> Self {
-        Self {
-            name: "pki".to_string(),
-            backend: Arc::new(PkiBackend::new(Arc::clone(core.self_ref.as_ref().unwrap()))),
-        }
+    pub fn new(core: Arc<Core>) -> Self {
+        Self { name: "pki".to_string(), backend: Arc::new(PkiBackend::new(core)) }
     }
 }
 
@@ -123,9 +130,13 @@ impl Module for PkiModule {
         self.name.clone()
     }
 
-    fn setup(&mut self, core: &Core) -> Result<(), RvError> {
-        let pki = Arc::clone(&self.backend);
-        let pki_backend_new_func = move |_c: Arc<RwLock<Core>>| -> Result<Arc<dyn Backend>, RvError> {
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
+    fn setup(&self, core: &Core) -> Result<(), RvError> {
+        let pki = self.backend.clone();
+        let pki_backend_new_func = move |_c: Arc<Core>| -> Result<Arc<dyn Backend>, RvError> {
             let mut pki_backend = pki.new_backend();
             pki_backend.init()?;
             Ok(Arc::new(pki_backend))
@@ -133,7 +144,7 @@ impl Module for PkiModule {
         core.add_logical_backend("pki", Arc::new(pki_backend_new_func))
     }
 
-    fn cleanup(&mut self, core: &Core) -> Result<(), RvError> {
+    fn cleanup(&self, core: &Core) -> Result<(), RvError> {
         core.delete_logical_backend("pki")
     }
 }
@@ -148,7 +159,7 @@ mod test {
     use super::*;
     use crate::{
         core::Core,
-        test_utils::{init_test_rusty_vault, test_delete_api, test_mount_api, test_read_api, test_write_api},
+        test_utils::{new_unseal_test_rusty_vault, test_delete_api, test_mount_api, test_read_api, test_write_api},
     };
 
     #[maybe_async::maybe_async]
@@ -397,9 +408,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
 
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_config_ca() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_config_ca");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_config_ca").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "pki/";
 
         // mount pki backend to path: pki/
@@ -427,9 +437,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
 
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_config_role() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_config_role");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_config_role").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "pki/";
         let role_name = "test";
 
@@ -465,9 +474,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
 
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_issue_cert() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_issue_cert");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_issue_cert").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "pki/";
         let role_name = "test";
 
@@ -563,9 +571,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
 
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_generate_root() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_generate_root");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_generate_root").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "pki/";
         let role_name = "test";
 
@@ -589,9 +596,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
     #[cfg(feature = "crypto_adaptor_tongsuo")]
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_sm2_generate_root() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_sm2_generate_root");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_sm2_generate_root").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "sm2pki/";
         let role_name = "test";
 
@@ -861,9 +867,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
 
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_generate_key() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_generate_key");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_generate_key").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "pki";
 
         // mount pki backend to path: pki/
@@ -963,9 +968,8 @@ x/+V28hUf8m8P2NxP5ALaDZagdaMfzjGZo3O3wDv33Cds0P5GMGQYnRXDxcZN/2L
 
     #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
     async fn test_pki_import_key() {
-        let (root_token, c) = init_test_rusty_vault("test_pki_import_key");
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault("test_pki_import_key").await;
         let token = &root_token;
-        let core = c.read().unwrap();
         let path = "pki";
 
         // mount pki backend to path: pki/

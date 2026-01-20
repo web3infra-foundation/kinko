@@ -148,6 +148,8 @@ pub enum Capability {
     Sudo = 1 << 6,
     #[strum(to_string = "patch")]
     Patch = 1 << 7,
+    #[strum(to_string = "root")]
+    Root = 1 << 8,
 }
 
 impl Capability {
@@ -240,8 +242,7 @@ impl Policy {
                     let path_str = path_label.as_str().to_string();
                     if path_str.contains("+*") {
                         return Err(rv_error_string!(&format!(
-                            "path {}: invalid use of wildcards ('+*' is forbidden)",
-                            path_str
+                            "path {path_str}: invalid use of wildcards ('+*' is forbidden)"
                         )));
                     }
 

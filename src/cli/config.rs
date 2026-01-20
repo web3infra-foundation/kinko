@@ -4,6 +4,7 @@
 
 use std::{collections::HashMap, fmt, fs, path::Path};
 
+use better_default::Default;
 use openssl::ssl::SslVersion;
 use serde::{
     de::{self, Visitor},
@@ -14,7 +15,7 @@ use serde_json::Value;
 use crate::errors::RvError;
 
 /// A struct that contains several configurable options of RustyVault server
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(deserialize_with = "validate_listener")]
     pub listener: HashMap<String, Listener>,
@@ -41,12 +42,14 @@ pub struct Config {
     #[serde(default = "default_hmac_level")]
     pub mount_entry_hmac_level: MountEntryHMACLevel,
     #[serde(default = "default_mounts_monitor_interval")]
+    #[default(5)]
     pub mounts_monitor_interval: u64,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Copy, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum MountEntryHMACLevel {
+    #[default]
     None,
     Compat,
     High,
@@ -176,7 +179,7 @@ where
                 "tls11" => Ok(SslVersion::TLS1_1),
                 "tls12" => Ok(SslVersion::TLS1_2),
                 "tls13" => Ok(SslVersion::TLS1_3),
-                _ => Err(E::custom(format!("unexpected SSL/TLS version: {}", value))),
+                _ => Err(E::custom(format!("unexpected SSL/TLS version: {value}"))),
             }
         }
     }
@@ -264,7 +267,7 @@ pub fn load_config(path: &str) -> Result<Config, RvError> {
 }
 
 fn load_config_dir(dir: &str) -> Result<Config, RvError> {
-    log::debug!("load_config_dir: {}", dir);
+    log::debug!("load_config_dir: {dir}");
     let mut paths: Vec<String> = Vec::new();
 
     if let Ok(entries) = fs::read_dir(dir) {
@@ -286,7 +289,7 @@ fn load_config_dir(dir: &str) -> Result<Config, RvError> {
     let mut result = None;
 
     for path in paths {
-        log::debug!("load_config_dir path: {}", path);
+        log::debug!("load_config_dir path: {path}");
         let config = load_config_file(&path)?;
         if result.is_none() {
             result = Some(config.clone());
@@ -299,7 +302,7 @@ fn load_config_dir(dir: &str) -> Result<Config, RvError> {
 }
 
 fn load_config_file(path: &str) -> Result<Config, RvError> {
-    log::debug!("load_config_file: {}", path);
+    log::debug!("load_config_file: {path}");
     let file = fs::File::open(path)?;
 
     if path.ends_with(".hcl") {
@@ -313,7 +316,7 @@ fn load_config_file(path: &str) -> Result<Config, RvError> {
         check_config(&config)?;
         Ok(config)
     } else {
-        return Err(RvError::ErrConfigPathInvalid);
+        Err(RvError::ErrConfigPathInvalid)
     }
 }
 

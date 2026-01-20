@@ -45,6 +45,7 @@ use ureq::AgentBuilder;
 
 use crate::{
     api::{client::TLSConfigBuilder, Client},
+    cli::config::Config,
     core::{Core, InitResult, SealConfig},
     errors::RvError,
     http,
@@ -53,6 +54,7 @@ use crate::{
     rv_error_response, rv_error_string,
     storage::{self, Backend},
     utils::cert::Certificate,
+    RustyVault,
 };
 
 lazy_static! {
@@ -76,7 +78,7 @@ pub struct TestHttpServer {
     pub name: String,
     pub binary_path: String,
     pub mount_path: String,
-    pub core: Arc<RwLock<Core>>,
+    pub core: Arc<Core>,
     pub root_token: String,
     pub token: String,
     pub ca_cert_pem: String,
@@ -91,14 +93,17 @@ pub struct TestHttpServer {
     pub thread: Option<thread::JoinHandle<()>>,
 }
 
+#[maybe_async::maybe_async]
 impl TestHttpServer {
-    pub fn new(name: &str, tls_enable: bool) -> Self {
+    pub async fn new(name: &str, tls_enable: bool) -> Self {
         let root_token;
         let seal_config = SealConfig { secret_shares: 10, secret_threshold: 5 };
         let mut test_http_server = TestHttpServer::new_without_init(name, tls_enable);
 
-        let init_result = init_test_rusty_vault_core(Arc::clone(&test_http_server.core));
+        let core = test_http_server.core.clone();
+        let init_result = core.init(&seal_config).await;
         println!("init_result: {:?}", init_result);
+        let init_result = init_result.unwrap();
 
         let mut keys: Vec<Vec<u8>> = Vec::new();
 
@@ -108,9 +113,10 @@ impl TestHttpServer {
 
         let k: Vec<&[u8]> = keys.iter().map(|v| v.as_slice()).collect();
 
-        assert!(unseal_test_rusty_vault_core(Arc::clone(&test_http_server.core), &k));
+        let result = unseal_test_rusty_vault_core(core.as_ref(), &k).await;
+        assert!(result);
 
-        root_token = init_result.root_token;
+        root_token = init_result.root_token.clone();
         println!("root_token: {:?}", root_token);
 
         test_http_server.root_token = root_token;
@@ -121,11 +127,8 @@ impl TestHttpServer {
     pub fn new_without_init(name: &str, tls_enable: bool) -> Self {
         let barrier = Arc::new(Barrier::new(2));
         let (stop_tx, stop_rx) = oneshot::channel();
-        let core = new_test_rusty_vault_core(name);
-        {
-            let mut c = core.write().unwrap();
-            assert!(c.config(Arc::clone(&core), None).is_ok());
-        }
+        let rvault = new_test_rusty_vault(name);
+        let core = rvault.core.load().clone();
 
         let mut scheme = "http";
         let mut ca_cert_pem = "".into();
@@ -174,7 +177,7 @@ impl TestHttpServer {
         }
 
         let (server, listen_addr) = new_test_http_server(core.clone(), test_tls_config).unwrap();
-        let server_thread = start_test_http_server(server, Arc::clone(&barrier), stop_rx);
+        let server_thread = start_test_http_server(server, barrier.clone(), stop_rx);
 
         barrier.wait();
 
@@ -201,13 +204,11 @@ impl TestHttpServer {
     }
 
     pub fn new_with_backend(backend: Arc<dyn Backend>, tls_enable: bool) -> Self {
+        let config = Config::default();
         let barrier = Arc::new(Barrier::new(2));
         let (stop_tx, stop_rx) = oneshot::channel();
-        let core = Arc::new(RwLock::new(Core::new(backend)));
-        {
-            let mut c = core.write().unwrap();
-            assert!(c.config(Arc::clone(&core), None).is_ok());
-        }
+        let rvault = RustyVault::new(backend, Some(&config)).unwrap();
+        let core = rvault.core.load().clone();
 
         let mut scheme = "http";
         let mut ca_cert_pem = "".into();
@@ -256,7 +257,7 @@ impl TestHttpServer {
         }
 
         let (server, listen_addr) = new_test_http_server(core.clone(), test_tls_config).unwrap();
-        let server_thread = start_test_http_server(server, Arc::clone(&barrier), stop_rx);
+        let server_thread = start_test_http_server(server, barrier.clone(), stop_rx);
 
         barrier.wait();
 
@@ -282,10 +283,10 @@ impl TestHttpServer {
         }
     }
 
-    pub fn new_with_prometheus(name: &str, tls_enable: bool) -> Self {
+    pub async fn new_with_prometheus(name: &str, tls_enable: bool) -> Self {
         let barrier = Arc::new(Barrier::new(2));
         let (stop_tx, stop_rx) = oneshot::channel();
-        let (root_token, core) = init_test_rusty_vault(name);
+        let (_rvault, core, root_token) = new_unseal_test_rusty_vault(name).await;
 
         let mut scheme = "http";
         let mut ca_cert_pem = "".into();
@@ -335,12 +336,11 @@ impl TestHttpServer {
 
         let collection_interval: u64 = 15;
         let metrics_manager = Arc::new(RwLock::new(MetricsManager::new(collection_interval)));
-        let system_metrics = Arc::clone(&metrics_manager.read().unwrap().system_metrics);
+        let system_metrics = metrics_manager.read().unwrap().system_metrics.clone();
 
         let (server, listen_addr) =
             new_test_http_server_with_prometheus(core.clone(), metrics_manager, test_tls_config).unwrap();
-        let server_thread =
-            start_test_http_server_with_prometheus(server, Arc::clone(&barrier), stop_rx, system_metrics);
+        let server_thread = start_test_http_server_with_prometheus(server, barrier.clone(), stop_rx, system_metrics);
 
         barrier.wait();
 
@@ -515,7 +515,7 @@ impl TestHttpServer {
                 Ok((code, json))
             }
             Err(e) => {
-                println!("Request failed: {}", e);
+                println!("Request failed: {e}");
                 Err(RvError::UreqError { source: e })
             }
         }
@@ -608,7 +608,7 @@ impl TestHttpServer {
                 Ok((code, json))
             }
             Err(e) => {
-                println!("Request failed: {}", e);
+                println!("Request failed: {e}");
                 Err(RvError::UreqError { source: e })
             }
         }
@@ -664,7 +664,7 @@ impl TestHttpServer {
                     Err(rv_error_string!(format!("{}{}", stdout, stderr)))
                 }
             }
-            Err(e) => Err(rv_error_string!(format!("Failed to execute command: {}", e))),
+            Err(e) => Err(rv_error_string!(format!("Failed to execute command: {e}"))),
         }
     }
 
@@ -1028,27 +1028,28 @@ pub fn new_test_file_backend(path: &str) -> Arc<dyn Backend> {
     backend.unwrap()
 }
 
-pub fn new_test_rusty_vault_core(name: &str) -> Arc<RwLock<Core>> {
-    Arc::new(RwLock::new(Core::new(new_test_backend(name))))
+pub fn new_test_rusty_vault(name: &str) -> RustyVault {
+    RustyVault::new(new_test_backend(name), None).unwrap()
 }
 
-pub fn init_test_rusty_vault_core(core: Arc<RwLock<Core>>) -> InitResult {
-    let mut c = core.write().unwrap();
-    assert!(c.config(Arc::clone(&core), None).is_ok());
-
-    let seal_config = SealConfig { secret_shares: 10, secret_threshold: 5 };
-
-    let result = c.init(&seal_config);
+#[maybe_async::maybe_async]
+pub async fn init_test_rusty_vault(rvault: &RustyVault, seal_config: &SealConfig) -> InitResult {
+    let result = rvault.init(seal_config).await;
     assert!(result.is_ok());
 
     result.unwrap()
 }
 
-pub fn unseal_test_rusty_vault_core(core: Arc<RwLock<Core>>, keys: &[&[u8]]) -> bool {
-    let mut c = core.write().unwrap();
+#[maybe_async::maybe_async]
+pub async fn unseal_test_rusty_vault(rvault: &RustyVault, keys: &[&[u8]]) -> bool {
+    unseal_test_rusty_vault_core(rvault.core.load().as_ref(), keys).await
+}
+
+#[maybe_async::maybe_async]
+pub async fn unseal_test_rusty_vault_core(core: &Core, keys: &[&[u8]]) -> bool {
     let mut unsealed = false;
     for key in keys.iter() {
-        let unseal = c.unseal(key);
+        let unseal = core.unseal(key).await;
         assert!(unseal.is_ok());
         unsealed = unseal.unwrap();
     }
@@ -1056,12 +1057,14 @@ pub fn unseal_test_rusty_vault_core(core: Arc<RwLock<Core>>, keys: &[&[u8]]) -> 
     unsealed
 }
 
-pub fn init_test_rusty_vault(name: &str) -> (String, Arc<RwLock<Core>>) {
-    let seal_config = SealConfig { secret_shares: 10, secret_threshold: 5 };
+#[maybe_async::maybe_async]
+pub async fn new_unseal_test_rusty_vault(name: &str) -> (RustyVault, Arc<Core>, String) {
+    let seal_config = SealConfig { secret_shares: 9, secret_threshold: 5 };
     let root_token;
-    let c = new_test_rusty_vault_core(name);
 
-    let init_result = init_test_rusty_vault_core(Arc::clone(&c));
+    let rvault = new_test_rusty_vault(name);
+    let init_result = init_test_rusty_vault(&rvault, &seal_config).await;
+
     println!("init_result: {:?}", init_result);
 
     let mut keys: Vec<Vec<u8>> = Vec::new();
@@ -1072,18 +1075,18 @@ pub fn init_test_rusty_vault(name: &str) -> (String, Arc<RwLock<Core>>) {
 
     let k: Vec<&[u8]> = keys.iter().map(|v| v.as_slice()).collect();
 
-    assert!(unseal_test_rusty_vault_core(Arc::clone(&c), &k));
+    let result = unseal_test_rusty_vault(&rvault, &k).await;
+    assert!(result);
 
-    root_token = init_result.root_token;
+    root_token = init_result.root_token.clone();
     println!("root_token: {:?}", root_token);
 
-    (root_token, c)
+    let core = rvault.core.load().clone();
+
+    (rvault, core, root_token)
 }
 
-pub fn new_test_http_server(
-    core: Arc<RwLock<Core>>,
-    tls_config: Option<TestTlsConfig>,
-) -> Result<(Server, String), RvError> {
+pub fn new_test_http_server(core: Arc<Core>, tls_config: Option<TestTlsConfig>) -> Result<(Server, String), RvError> {
     let mut http_server = HttpServer::new(move || {
         App::new()
             .wrap(middleware::Logger::default())
@@ -1128,7 +1131,7 @@ pub fn new_test_http_server(
 }
 
 pub fn new_test_http_server_with_prometheus(
-    core: Arc<RwLock<Core>>,
+    core: Arc<Core>,
     metrics_manager: Arc<RwLock<MetricsManager>>,
     tls_config: Option<TestTlsConfig>,
 ) -> Result<(Server, String), RvError> {
@@ -1137,7 +1140,7 @@ pub fn new_test_http_server_with_prometheus(
             .wrap(middleware::Logger::default())
             .wrap(from_fn(metrics_midleware))
             .app_data(web::Data::new(core.clone()))
-            .app_data(web::Data::new(Arc::clone(&metrics_manager)))
+            .app_data(web::Data::new(metrics_manager.clone()))
             .configure(http::init_service)
             .default_service(web::to(HttpResponse::NotFound))
     })
@@ -1291,9 +1294,11 @@ pub fn test_multi_routine(backend: Arc<dyn Backend>) {
 
     // test mount kv
     let ret = test_http_server1.mount("kv", "kv");
+    println!("ret: {:?}", ret);
     assert!(ret.is_ok());
 
     let ret = test_http_server1.cli(&["write"], &["kv/foo", "aa=bb", "cc=dd"]);
+    println!("ret: {:?}", ret);
     assert_eq!(ret, Ok("Success! Data written to: kv/foo\n".into()));
 
     let ret = test_http_server1.cli(&["read"], &["--format=json", "kv/foo"]);
@@ -1461,8 +1466,9 @@ impl Clone for NoopBackend {
     }
 }
 
+#[maybe_async::maybe_async]
 impl logical::Backend for NoopBackend {
-    fn handle_request(&self, req: &mut Request) -> Result<Option<Response>, RvError> {
+    async fn handle_request(&self, req: &mut Request) -> Result<Option<Response>, RvError> {
         if self.rollback_errs && req.operation == Operation::Rollback {
             return Err(rv_error_string!("no-op backend rollback has erred out"));
         }

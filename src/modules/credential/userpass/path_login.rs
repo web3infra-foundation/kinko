@@ -11,7 +11,7 @@ use crate::{
 
 impl UserPassBackend {
     pub fn login_path(&self) -> Path {
-        let userpass_backend_ref = Arc::clone(&self.inner);
+        let userpass_backend_ref = self.inner.clone();
 
         let path = new_path!({
             pattern: r"login/(?P<username>\w[\w-]+\w)",
@@ -37,17 +37,18 @@ impl UserPassBackend {
     }
 }
 
+#[maybe_async::maybe_async]
 impl UserPassBackendInner {
-    pub fn login(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn login(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
         let err_info = "invalid username or password";
         let username_value = req.get_data("username")?;
         let username = username_value.as_str().unwrap().to_lowercase();
         let password_value = req.get_data("password")?;
         let password = password_value.as_str().unwrap();
 
-        let user = self.get_user(req, &username)?;
+        let user = self.get_user(req, &username).await?;
         if user.is_none() {
-            log::error!("{}", err_info);
+            log::error!("{err_info}");
             let resp = Response::error_response(err_info);
             return Ok(Some(resp));
         }
@@ -56,7 +57,7 @@ impl UserPassBackendInner {
 
         let check = self.verify_password_hash(password, &user.password_hash)?;
         if !check {
-            log::error!("{}", err_info);
+            log::error!("{err_info}");
             let resp = Response::error_response(err_info);
             return Ok(Some(resp));
         }
@@ -81,7 +82,7 @@ impl UserPassBackendInner {
         Ok(Some(resp))
     }
 
-    pub fn login_renew(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn login_renew(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
         if req.auth.is_none() {
             return Err(rv_error_string!("invalid request"));
         }
@@ -92,7 +93,7 @@ impl UserPassBackendInner {
         }
         let username = username.unwrap();
 
-        let user = self.get_user(req, username.as_str())?;
+        let user = self.get_user(req, username.as_str()).await?;
         if user.is_none() {
             return Ok(None);
         }

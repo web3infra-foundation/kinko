@@ -1,6 +1,6 @@
 [package]
 name = "rusty_vault"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 license = "Apache-2.0"
 description = """
@@ -54,6 +54,7 @@ zeroize = { version = "1.7.0", features = ["zeroize_derive"] }
 diesel = { version = "2.1.4", features = ["mysql", "r2d2"], optional = true }
 r2d2 = { version = "0.8.9", optional = true }
 r2d2-diesel = { version = "1.0.0", optional = true }
+sqlx = { version = "0.8", optional = true, default-features = true, features = ["macros", "mysql", "postgres", "sqlite", "any", "runtime-tokio", "chrono", "uuid", "json", "bigdecimal"] }
 bcrypt = "0.15"
 url = "2.5"
 ureq = { version = "2.10", features = ["json"] }
@@ -79,6 +80,8 @@ priority-queue = "2.1"
 crossbeam-channel = "0.5"
 maybe-async = { version = "0.2", optional = false }
 lockfile = "0.4.0"
+arc-swap = "1"
+blake3 = "1.8"
 
 # optional dependencies
 openssl = { version = "*", optional = true }
@@ -92,8 +95,12 @@ openssl-sys = { git = "https://github.com/Tongsuo-Project/rust-tongsuo.git" }
 [build-dependencies]
 toml = "0.8.19"
 
+[dev-dependencies]
+serial_test = "3.2"
+
 [features]
 default = ["crypto_adaptor_openssl"]
+storage_sqlx = ["sqlx"]
 storage_mysql = ["diesel", "r2d2", "r2d2-diesel"]
 crypto_adaptor_openssl = ["dep:openssl", "dep:openssl-sys"]
 crypto_adaptor_tongsuo = ["dep:openssl", "dep:openssl-sys"]

@@ -60,9 +60,9 @@ pub struct CertEntry {
 
 impl CertBackend {
     pub fn certs_path(&self) -> Path {
-        let cert_backend_ref1 = Arc::clone(&self.inner);
-        let cert_backend_ref2 = Arc::clone(&self.inner);
-        let cert_backend_ref3 = Arc::clone(&self.inner);
+        let cert_backend_ref1 = self.inner.clone();
+        let cert_backend_ref2 = self.inner.clone();
+        let cert_backend_ref3 = self.inner.clone();
 
         let mut path = new_path!({
             pattern: r"certs/(?P<name>\w[\w-]+\w)",
@@ -218,7 +218,7 @@ then the next renew will cause the lease to expire.
     }
 
     pub fn certs_list_path(&self) -> Path {
-        let cert_backend_ref = Arc::clone(&self.inner);
+        let cert_backend_ref = self.inner.clone();
 
         let path = new_path!({
             pattern: r"certs/?",
@@ -233,10 +233,11 @@ then the next renew will cause the lease to expire.
 }
 
 #[allow(clippy::assigning_clones)]
+#[maybe_async::maybe_async]
 impl CertBackendInner {
-    pub fn get_cert(&self, req: &Request, name: &str) -> Result<Option<CertEntry>, RvError> {
+    pub async fn get_cert(&self, req: &Request, name: &str) -> Result<Option<CertEntry>, RvError> {
         let key = format!("cert/{}", name.to_lowercase());
-        let storage_entry = req.storage_get(&key)?;
+        let storage_entry = req.storage_get(&key).await?;
         if storage_entry.is_none() {
             return Ok(None);
         }
@@ -263,16 +264,16 @@ impl CertBackendInner {
         Ok(Some(cert_entry))
     }
 
-    pub fn set_cert(&self, req: &Request, name: &str, cert_entry: &CertEntry) -> Result<(), RvError> {
-        let entry = StorageEntry::new(format!("cert/{}", name).as_str(), cert_entry)?;
+    pub async fn set_cert(&self, req: &Request, name: &str, cert_entry: &CertEntry) -> Result<(), RvError> {
+        let entry = StorageEntry::new(format!("cert/{name}").as_str(), cert_entry)?;
 
-        req.storage_put(&entry)
+        req.storage_put(&entry).await
     }
 
-    pub fn read_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
+    pub async fn read_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
         let name = req.get_data_as_str("name")?.to_lowercase();
 
-        let entry = self.get_cert(req, &name)?;
+        let entry = self.get_cert(req, &name).await?;
         if entry.is_none() {
             return Ok(None);
         }
@@ -300,12 +301,12 @@ impl CertBackendInner {
         Ok(Some(Response::data_response(Some(data.clone()))))
     }
 
-    pub fn write_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
+    pub async fn write_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
         let name = req.get_data_as_str("name")?.to_lowercase();
 
         let mut cert_entry = CertEntry::default();
 
-        let entry = self.get_cert(req, &name)?;
+        let entry = self.get_cert(req, &name).await?;
         if entry.is_some() {
             cert_entry = entry.unwrap();
         } else {
@@ -453,20 +454,20 @@ impl CertBackendInner {
             ));
         }
 
-        self.set_cert(req, &name, &cert_entry)?;
+        self.set_cert(req, &name, &cert_entry).await?;
 
         Ok(None)
     }
 
-    pub fn delete_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
+    pub async fn delete_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
         let name = req.get_data_as_str("name")?.to_lowercase();
 
-        req.storage_delete(format!("cert/{}", name).as_str())?;
+        req.storage_delete(format!("cert/{name}").as_str()).await?;
         Ok(None)
     }
 
-    pub fn list_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
-        let certs = req.storage_list("cert/".to_string().as_str())?;
+    pub async fn list_cert(&self, _backend: &dyn Backend, req: &Request) -> Result<Option<Response>, RvError> {
+        let certs = req.storage_list("cert/".to_string().as_str()).await?;
         let resp = Response::list_response(&certs);
         Ok(Some(resp))
     }

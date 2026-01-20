@@ -38,7 +38,7 @@ impl CommandExecutor for Seal {
         match self.main() {
             Ok(_) => EXIT_CODE_OK,
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {e}");
                 EXIT_CODE_INSUFFICIENT_PARAMS
             }
         }
@@ -53,7 +53,7 @@ impl CommandExecutor for Seal {
             Ok(_) => {
                 println!("Success! RustyVault is sealed.");
             }
-            Err(e) => eprintln!("Error sealing: {}", e),
+            Err(e) => eprintln!("Error sealing: {e}"),
         }
         Ok(())
     }
@@ -67,9 +67,9 @@ mod test {
 
     use crate::test_utils::TestHttpServer;
 
-    #[test]
-    fn test_cli_operator_seal() {
-        let test_http_server = TestHttpServer::new("test_cli_operator_seal", true);
+    #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
+    async fn test_cli_operator_seal() {
+        let test_http_server = TestHttpServer::new("test_cli_operator_seal", true).await;
 
         // rvault status
         let ret = test_http_server.cli(&["status"], &["--format=raw"]);

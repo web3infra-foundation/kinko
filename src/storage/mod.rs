@@ -27,14 +27,17 @@ pub mod barrier_view;
 #[cfg(feature = "storage_mysql")]
 pub mod mysql;
 pub mod physical;
+#[cfg(all(not(feature = "sync_handler"), feature = "storage_sqlx"))]
+pub mod sqlx;
 
 /// A trait that abstracts core methods for all storage barrier types.
+#[maybe_async::maybe_async]
 pub trait Storage: Send + Sync {
-    fn list(&self, prefix: &str) -> Result<Vec<String>, RvError>;
-    fn get(&self, key: &str) -> Result<Option<StorageEntry>, RvError>;
-    fn put(&self, entry: &StorageEntry) -> Result<(), RvError>;
-    fn delete(&self, key: &str) -> Result<(), RvError>;
-    fn lock(&self, _lock_name: &str) -> Result<Box<dyn Any>, RvError> {
+    async fn list(&self, prefix: &str) -> Result<Vec<String>, RvError>;
+    async fn get(&self, key: &str) -> Result<Option<StorageEntry>, RvError>;
+    async fn put(&self, entry: &StorageEntry) -> Result<(), RvError>;
+    async fn delete(&self, key: &str) -> Result<(), RvError>;
+    async fn lock(&self, _lock_name: &str) -> Result<Box<dyn Any>, RvError> {
         Ok(Box::new(true))
     }
 }
@@ -55,13 +58,14 @@ impl StorageEntry {
     }
 }
 
+#[maybe_async::maybe_async]
 pub trait Backend: Send + Sync {
     //! This trait decsribes the generic methods that a storage backend needs to implement.
-    fn list(&self, prefix: &str) -> Result<Vec<String>, RvError>;
-    fn get(&self, key: &str) -> Result<Option<BackendEntry>, RvError>;
-    fn put(&self, entry: &BackendEntry) -> Result<(), RvError>;
-    fn delete(&self, key: &str) -> Result<(), RvError>;
-    fn lock(&self, _lock_name: &str) -> Result<Box<dyn Any>, RvError> {
+    async fn list(&self, prefix: &str) -> Result<Vec<String>, RvError>;
+    async fn get(&self, key: &str) -> Result<Option<BackendEntry>, RvError>;
+    async fn put(&self, entry: &BackendEntry) -> Result<(), RvError>;
+    async fn delete(&self, key: &str) -> Result<(), RvError>;
+    async fn lock(&self, _lock_name: &str) -> Result<Box<dyn Any>, RvError> {
         Ok(Box::new(true))
     }
 }
@@ -83,6 +87,11 @@ pub fn new_backend(t: &str, conf: &HashMap<String, Value>) -> Result<Arc<dyn Bac
         #[cfg(feature = "storage_mysql")]
         "mysql" => {
             let backend = mysql::mysql_backend::MysqlBackend::new(conf)?;
+            Ok(Arc::new(backend))
+        }
+        #[cfg(all(not(feature = "sync_handler"), feature = "storage_sqlx"))]
+        "sqlx" => {
+            let backend = sqlx::SqlxBackend::new(conf)?;
             Ok(Arc::new(backend))
         }
         "mock" => Ok(Arc::new(physical::mock::MockBackend::new())),
@@ -116,33 +125,34 @@ pub mod test {
         assert!(backend.is_err());
     }
 
-    pub fn test_backend_curd(backend: &dyn Backend) {
+    #[maybe_async::maybe_async]
+    pub async fn test_backend_curd(backend: &dyn Backend) {
         // Should be empty
-        let keys = backend.list("");
+        let keys = backend.list("").await;
         assert!(keys.is_ok());
         assert_eq!(keys.unwrap().len(), 0);
 
-        let keys = backend.list("bar");
+        let keys = backend.list("bar").await;
         assert!(keys.is_ok());
         assert_eq!(keys.unwrap().len(), 0);
 
         // Delete should work if it does not exist
-        let res = backend.delete("bar");
+        let res = backend.delete("bar").await;
         assert!(res.is_ok());
 
         // Get should work, but result is None
-        let res = backend.get("bar");
+        let res = backend.get("bar").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), None);
 
         // Make an Entry
         let entry = BackendEntry { key: "bar".to_string(), value: "test".as_bytes().to_vec() };
 
-        let res = backend.put(&entry);
+        let res = backend.put(&entry).await;
         assert!(res.is_ok());
 
         // Get should ok
-        let res = backend.get("bar");
+        let res = backend.get("bar").await;
         assert!(res.is_ok());
         match res.unwrap() {
             Some(e) => {
@@ -152,58 +162,59 @@ pub mod test {
         }
 
         // List should not be empty
-        let keys = backend.list("");
+        let keys = backend.list("").await;
         assert!(keys.is_ok());
         let keys = keys.unwrap();
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0], "bar".to_string());
 
         // Delete should ok
-        let res = backend.delete("bar");
+        let res = backend.delete("bar").await;
         assert!(res.is_ok());
 
         // List should be empty
-        let keys = backend.list("");
+        let keys = backend.list("").await;
         assert!(keys.is_ok());
         let keys = keys.unwrap();
         assert_eq!(keys.len(), 0);
 
         // Get should work, but result is None
-        let res = backend.get("bar");
+        let res = backend.get("bar").await;
         assert!(res.is_ok());
         assert_eq!(res.unwrap(), None);
     }
 
-    pub fn test_backend_list_prefix(backend: &dyn Backend) {
+    #[maybe_async::maybe_async]
+    pub async fn test_backend_list_prefix(backend: &dyn Backend) {
         let entry1 = BackendEntry { key: "bar".to_string(), value: "test".as_bytes().to_vec() };
         let entry2 = BackendEntry { key: "bar/foo".to_string(), value: "test".as_bytes().to_vec() };
         let entry3 = BackendEntry { key: "bar/foo/goo".to_string(), value: "test".as_bytes().to_vec() };
 
-        let res = backend.put(&entry1);
+        let res = backend.put(&entry1).await;
         assert!(res.is_ok());
 
-        let res = backend.put(&entry2);
+        let res = backend.put(&entry2).await;
         assert!(res.is_ok());
 
-        let res = backend.put(&entry3);
+        let res = backend.put(&entry3).await;
         assert!(res.is_ok());
 
         // Scan the root
-        let keys = backend.list("");
+        let keys = backend.list("").await;
         assert!(keys.is_ok());
         let keys = keys.unwrap();
         assert_eq!(keys.len(), 2);
         assert!(keys.join("") == "barbar/" || keys.join("") == "bar/bar");
 
         // Scan bar/
-        let keys = backend.list("bar/");
+        let keys = backend.list("bar/").await;
         assert!(keys.is_ok());
         let keys = keys.unwrap();
         assert_eq!(keys.len(), 2);
         assert!(keys.join("") == "foofoo/" || keys.join("") == "foo/foo");
 
         // Scan bar/foo/
-        let keys = backend.list("bar/foo/");
+        let keys = backend.list("bar/foo/").await;
         assert!(keys.is_ok());
         let keys = keys.unwrap();
         assert_eq!(keys.len(), 1);

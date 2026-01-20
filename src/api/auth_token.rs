@@ -41,7 +41,7 @@ pub struct TokenAuth<'a> {
 }
 
 impl Client {
-    pub fn token(&self) -> TokenAuth {
+    pub fn token(&self) -> TokenAuth<'_> {
         TokenAuth { client: self }
     }
 }
@@ -59,7 +59,7 @@ impl TokenAuth<'_> {
 
     pub fn create_with_role(&self, input: &TokenInput, role_name: &str) -> Result<HttpResponse, RvError> {
         let data = serde_json::to_value(input)?;
-        self.request_write(&format!("/v1/auth/token/create/{}", role_name), data.as_object().cloned())
+        self.request_write(format!("/v1/auth/token/create/{role_name}"), data.as_object().cloned())
     }
 
     pub fn lookup(&self, token: &str) -> Result<HttpResponse, RvError> {

@@ -117,7 +117,7 @@ impl CommandExecutor for Login {
 
         let login_handler = LoginHandlers.get(&auth_method);
         if login_handler.is_none() {
-            println!("Unknown auth method: {}.", auth_method);
+            println!("Unknown auth method: {auth_method}.");
             println!(r#"Use "rvault auth list" to see the complete list of auth methods."#);
             println!("Additionally, some auth methods are only available via the HTTP API.");
             std::process::exit(1);
@@ -165,9 +165,9 @@ mod test {
 
     use crate::test_utils::TestHttpServer;
 
-    #[test]
-    fn test_cli_login() {
-        let mut test_http_server = TestHttpServer::new("test_cli_login", true);
+    #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
+    async fn test_cli_login() {
+        let mut test_http_server = TestHttpServer::new("test_cli_login", true).await;
 
         // set token
         test_http_server.token = test_http_server.root_token.clone();

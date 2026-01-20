@@ -156,13 +156,19 @@ impl Client {
         self
     }
 
-    pub fn request(&self, method: &str, path: &str, data: Option<Map<String, Value>>) -> Result<HttpResponse, RvError> {
+    pub fn request<S: Into<String>>(
+        &self,
+        method: &str,
+        path: S,
+        data: Option<Map<String, Value>>,
+    ) -> Result<HttpResponse, RvError> {
+        let path = path.into();
         let url = if path.starts_with('/') {
             format!("{}{}", self.address, path)
         } else {
             format!("{}/{}", self.address, path)
         };
-        log::debug!("request url: {}, method: {}", url, method);
+        log::debug!("request url: {url}, method: {method}");
 
         let mut req = self.http_client.request(&method.to_uppercase(), &url);
 
@@ -193,33 +199,45 @@ impl Client {
                 Ok(ret.clone())
             }
             Err(e) => {
-                log::error!("Request failed: {}", e);
+                log::error!("Request failed: {e}");
                 Err(RvError::UreqError { source: e })
             }
         }
     }
 
-    pub fn request_list(&self, path: &str) -> Result<HttpResponse, RvError> {
+    pub fn request_list<S: Into<String>>(&self, path: S) -> Result<HttpResponse, RvError> {
         self.request("LIST", path, None)
     }
 
-    pub fn request_read(&self, path: &str) -> Result<HttpResponse, RvError> {
+    pub fn request_read<S: Into<String>>(&self, path: S) -> Result<HttpResponse, RvError> {
         self.request("GET", path, None)
     }
 
-    pub fn request_get(&self, path: &str) -> Result<HttpResponse, RvError> {
+    pub fn request_get<S: Into<String>>(&self, path: S) -> Result<HttpResponse, RvError> {
         self.request("GET", path, None)
     }
 
-    pub fn request_write(&self, path: &str, data: Option<Map<String, Value>>) -> Result<HttpResponse, RvError> {
+    pub fn request_write<S: Into<String>>(
+        &self,
+        path: S,
+        data: Option<Map<String, Value>>,
+    ) -> Result<HttpResponse, RvError> {
         self.request("POST", path, data)
     }
 
-    pub fn request_put(&self, path: &str, data: Option<Map<String, Value>>) -> Result<HttpResponse, RvError> {
+    pub fn request_put<S: Into<String>>(
+        &self,
+        path: S,
+        data: Option<Map<String, Value>>,
+    ) -> Result<HttpResponse, RvError> {
         self.request("PUT", path, data)
     }
 
-    pub fn request_delete(&self, path: &str, data: Option<Map<String, Value>>) -> Result<HttpResponse, RvError> {
+    pub fn request_delete<S: Into<String>>(
+        &self,
+        path: S,
+        data: Option<Map<String, Value>>,
+    ) -> Result<HttpResponse, RvError> {
         self.request("DELETE", path, data)
     }
 }

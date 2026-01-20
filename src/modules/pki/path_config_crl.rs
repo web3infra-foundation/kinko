@@ -10,8 +10,8 @@ use crate::{
 
 impl PkiBackend {
     pub fn config_crl_path(&self) -> Path {
-        let pki_backend_ref1 = Arc::clone(&self.inner);
-        let pki_backend_ref2 = Arc::clone(&self.inner);
+        let pki_backend_ref1 = self.inner.clone();
+        let pki_backend_ref2 = self.inner.clone();
 
         let path = new_path!({
             pattern: "config/crl",
@@ -35,12 +35,17 @@ This endpoint allows configuration of the CRL lifetime.
     }
 }
 
+#[maybe_async::maybe_async]
 impl PkiBackendInner {
-    pub fn read_path_crl(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn read_path_crl(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
         Ok(None)
     }
 
-    pub fn write_path_crl(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn write_path_crl(
+        &self,
+        _backend: &dyn Backend,
+        _req: &mut Request,
+    ) -> Result<Option<Response>, RvError> {
         Ok(None)
     }
 }

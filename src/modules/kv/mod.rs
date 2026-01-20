@@ -1,11 +1,7 @@
 //! The secure key-value object storage module. The user can use this module to store arbitary data
 //! into RustyVault. The data stored in RustyVault is encrypted.
 
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{any::Any, collections::HashMap, sync::Arc, time::Duration};
 
 use derive_more::Deref;
 use humantime::parse_duration;
@@ -42,7 +38,7 @@ pub struct KvModule {
 }
 
 pub struct KvBackendInner {
-    pub core: Arc<RwLock<Core>>,
+    pub core: Arc<Core>,
 }
 
 #[derive(Deref)]
@@ -52,17 +48,17 @@ pub struct KvBackend {
 }
 
 impl KvBackend {
-    pub fn new(core: Arc<RwLock<Core>>) -> Self {
+    pub fn new(core: Arc<Core>) -> Self {
         Self { inner: Arc::new(KvBackendInner { core }) }
     }
 
     pub fn new_backend(&self) -> LogicalBackend {
-        let kv_backend_read = Arc::clone(&self.inner);
-        let kv_backend_write = Arc::clone(&self.inner);
-        let kv_backend_delete = Arc::clone(&self.inner);
-        let kv_backend_list = Arc::clone(&self.inner);
-        let kv_backend_renew = Arc::clone(&self.inner);
-        let kv_backend_revoke = Arc::clone(&self.inner);
+        let kv_backend_read = self.inner.clone();
+        let kv_backend_write = self.inner.clone();
+        let kv_backend_delete = self.inner.clone();
+        let kv_backend_list = self.inner.clone();
+        let kv_backend_renew = self.inner.clone();
+        let kv_backend_revoke = self.inner.clone();
 
         let backend = new_logical_backend!({
             paths: [
@@ -96,9 +92,10 @@ impl KvBackend {
     }
 }
 
+#[maybe_async::maybe_async]
 impl KvBackendInner {
-    pub fn handle_read(&self, backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
-        let entry = req.storage_get(&req.path)?;
+    pub async fn handle_read(&self, backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
+        let entry = req.storage_get(&req.path).await?;
         if entry.is_none() {
             return Ok(None);
         }
@@ -136,7 +133,7 @@ impl KvBackendInner {
         Ok(Some(resp))
     }
 
-    pub fn handle_write(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn handle_write(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
         if req.body.is_none() {
             return Err(RvError::ErrModuleKvDataFieldMissing);
         }
@@ -144,28 +141,28 @@ impl KvBackendInner {
         let data = serde_json::to_string(req.body.as_ref().unwrap())?;
         let entry = StorageEntry { key: req.path.clone(), value: data.into_bytes() };
 
-        req.storage_put(&entry)?;
+        req.storage_put(&entry).await?;
         Ok(None)
     }
 
-    pub fn handle_delete(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
-        req.storage_delete(&req.path)?;
+    pub async fn handle_delete(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
+        req.storage_delete(&req.path).await?;
         Ok(None)
     }
 
-    pub fn handle_list(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
-        let keys = req.storage_list(&req.path)?;
+    pub async fn handle_list(&self, _backend: &dyn Backend, req: &mut Request) -> Result<Option<Response>, RvError> {
+        let keys = req.storage_list(&req.path).await?;
         let resp = Response::list_response(&keys);
         Ok(Some(resp))
     }
 
-    pub fn handle_noop(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
+    pub async fn handle_noop(&self, _backend: &dyn Backend, _req: &mut Request) -> Result<Option<Response>, RvError> {
         Ok(None)
     }
 }
 
 impl KvModule {
-    pub fn new(core: Arc<RwLock<Core>>) -> Self {
+    pub fn new(core: Arc<Core>) -> Self {
         Self { name: "kv".to_string(), backend: Arc::new(KvBackend::new(core)) }
     }
 }
@@ -175,9 +172,13 @@ impl Module for KvModule {
         self.name.clone()
     }
 
-    fn setup(&mut self, core: &Core) -> Result<(), RvError> {
-        let kv = Arc::clone(&self.backend);
-        let kv_backend_new_func = move |_c: Arc<RwLock<Core>>| -> Result<Arc<dyn Backend>, RvError> {
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
+    }
+
+    fn setup(&self, core: &Core) -> Result<(), RvError> {
+        let kv = self.backend.clone();
+        let kv_backend_new_func = move |_c: Arc<Core>| -> Result<Arc<dyn Backend>, RvError> {
             let mut kv_backend = kv.new_backend();
             kv_backend.init()?;
             Ok(Arc::new(kv_backend))
@@ -185,7 +186,7 @@ impl Module for KvModule {
         core.add_logical_backend("kv", Arc::new(kv_backend_new_func))
     }
 
-    fn cleanup(&mut self, core: &Core) -> Result<(), RvError> {
+    fn cleanup(&self, core: &Core) -> Result<(), RvError> {
         core.delete_logical_backend("kv")
     }
 }

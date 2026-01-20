@@ -40,8 +40,9 @@ pub struct Config {
     pub hmac_type: MessageDigest,
 }
 
+#[maybe_async::maybe_async]
 impl Salt {
-    pub fn new(storage: Option<&dyn Storage>, config: Option<&Config>) -> Result<Self, RvError> {
+    pub async fn new(storage: Option<&dyn Storage>, config: Option<&Config>) -> Result<Self, RvError> {
         let mut salt = Salt::default();
         if let Some(c) = config {
             if salt.config.location != c.location && !c.location.is_empty() {
@@ -58,13 +59,13 @@ impl Salt {
         }
 
         if let Some(s) = storage {
-            if let Some(raw) = s.get(&salt.config.location)? {
+            if let Some(raw) = s.get(&salt.config.location).await? {
                 salt.salt = String::from_utf8_lossy(&raw.value).to_string();
                 salt.generated = false;
             } else {
                 let entry = StorageEntry { key: salt.config.location.clone(), value: salt.salt.as_bytes().to_vec() };
 
-                s.put(&entry)?;
+                s.put(&entry).await?;
             }
         }
 
@@ -95,7 +96,7 @@ impl Salt {
 
         let hmac = self.get_hmac(data)?;
 
-        Ok(format!("{}:{}", hmac_type, hmac))
+        Ok(format!("{hmac_type}:{hmac}"))
     }
 
     pub fn get_hash(&self, data: &str) -> Result<String, RvError> {
@@ -126,34 +127,35 @@ mod test {
         test_utils::new_test_backend,
     };
 
-    #[test]
-    fn test_salt() {
+    #[maybe_async::test(feature = "sync_handler", async(all(not(feature = "sync_handler")), tokio::test))]
+    async fn test_salt() {
         // init the storage backend
         let backend = new_test_backend("test_salt");
 
         let mut key = vec![0u8; 32];
         thread_rng().fill(key.as_mut_slice());
-        let aes_gcm_view = barrier_aes_gcm::AESGCMBarrier::new(Arc::clone(&backend));
+        let aes_gcm_view = barrier_aes_gcm::AESGCMBarrier::new(backend);
 
-        let init = aes_gcm_view.init(key.as_slice());
+        let init = aes_gcm_view.init(key.as_slice()).await;
         assert!(init.is_ok());
 
-        assert!(aes_gcm_view.unseal(key.as_slice()).is_ok());
+        let result = aes_gcm_view.unseal(key.as_slice()).await;
+        assert!(result.is_ok());
 
         let view = barrier_view::BarrierView::new(Arc::new(aes_gcm_view), "test");
 
         //test salt
-        let salt = Salt::new(Some(&view), None);
+        let salt = Salt::new(Some(&view), None).await;
         assert!(salt.is_ok());
 
         let salt = salt.unwrap();
         assert!(salt.did_generate());
 
-        let ss = view.get(DEFAULT_LOCATION);
+        let ss = view.get(DEFAULT_LOCATION).await;
         assert!(ss.is_ok());
         assert!(ss.unwrap().is_some());
 
-        let salt2 = Salt::new(Some(&view), Some(&salt.config));
+        let salt2 = Salt::new(Some(&view), Some(&salt.config)).await;
         assert!(salt2.is_ok());
 
         let salt2 = salt2.unwrap();
